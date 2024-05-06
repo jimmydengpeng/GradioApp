@@ -12,7 +12,7 @@ conn = sqlite3.connect(database_path)
 cursor = conn.cursor()
 
 # 构造SQL查询语句
-query = f'SELECT {column_name} FROM {table_name}'
+query = f'SELECT {column_name} FROM {table_name} WHERE '
 
 # 执行查询
 cursor.execute(query)
