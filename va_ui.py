@@ -31,6 +31,7 @@ if not osp.exists(TMP_PTH):
     os.mkdir(TMP_PTH)
 
 CUR_DATE_PTH = AUDIO_FILE_LIST[0] # e.g. 2024XXXX
+IS_FILTERED = False
 
 
 TEST_LOAD_MODEL = False
@@ -43,33 +44,60 @@ if TEST_LOAD_MODEL:
     llm = Ollama(model="qwen:7b")
 
 
-
-
-
 # --- Button Click Listeners ---
 
-def btn_fe_all_listner(file: str):
+def btn_filter_listener(in_date, in_num, in_text):
+    global IS_FILTERED
+    IS_FILTERED = True
+    return _filter_files_in_db(in_date, in_num, in_text), _get_cancel_btn(IS_FILTERED)
+
+def _get_fe_all():
+    return gr.FileExplorer(
+        glob="*.*", 
+        file_count="single",
+        root_dir=AUDIO_PTH,
+        # ignore_glob=".*",
+        label="所有文件")
+
+def _get_cancel_btn(interactive):
+    return gr.Button("清除", interactive=interactive)
+
+def btn_all_file_listener():
+    global IS_FILTERED
+    IS_FILTERED = False
+    return _get_fe_all()
+
+def btn_filter_cancel_listener():
+    global IS_FILTERED
+    IS_FILTERED = False
+    fe_all = _get_fe_all()
+    in_cal = Calendar(value=None, type="string", label="选择日期")
+    in_num = gr.Number(label="输入号码进行匹配：", value="")
+    in_text = gr.Textbox(label="输入对话内容关键字进行搜索：", value="", info="", max_lines=100, interactive=True)
+    return fe_all, in_cal, in_num, in_text, _get_cancel_btn(IS_FILTERED)
+
+def btn_fe_show_listner(file: str):
+    if IS_FILTERED:
+        # 预处理文件路径
+        file_name = str(file).split('/')[-1]
+        file = _get_file_pth(file_name, CUR_DATE_PTH, AUDIO_PTH)
+        if not osp.exists(file):
+            raise gr.Error(f"No such file path for {file}!")
     res = get_file_asr_summary_in_db(file)
-    return _get_audio_output_component(file), res[0], res[1]
 
+    in_num = res[4]
+    out_num = res[5]
 
-# 将tmp目录里的file与audio目录对应的匹配
-def btn_fe_filtered_listener(file_tmp: str):
-    # 预处理文件路径
-    file_name = str(file_tmp).split('/')[-1]
-    file = _get_file_pth(file_name, CUR_DATE_PTH, AUDIO_PTH)
+    in_summary = gr.Textbox(value=res[2], label=f"呼入号码（{in_num}）今日总结：", info="", max_lines=100, interactive=True)
+    out_summary = gr.Textbox(value=res[3], label=f"呼出号码（{out_num}）今日总结：", info="", max_lines=100, interactive=True)
 
-    if not osp.exists(file):
-        raise gr.Error(f"No such file path for {file}!")
-    res = get_file_asr_summary_in_db(file)
-    return _get_audio_output_component(file), res[0], res[1]
+    return _get_audio_output_component(file), res[0], res[1], in_summary, out_summary
 
 
 def process_video(pth: str):
     new_pth = pth.split('.')[0] + '.wav'
     os.system(f'ffmpeg -i {pth} -acodec pcm_s16le -f s16le -ac 1 -ar 16000 -f wav {new_pth}')
     return transcribe(new_pth)
-
 
 
 def transcribe(inputs: str, task="transcribe"):
@@ -80,34 +108,37 @@ def transcribe(inputs: str, task="transcribe"):
 
     abs = llm.invoke(f"下面是一段两个人的对话，总结一下：{text}") 
 
-
     return  text, abs
-
-
 
 
 def _get_file_pth(file: str, date: str, root=AUDIO_PTH):
     return osp.join(osp.join(root, date), file)
 
 
-def _get_audio_output_component(pth: str):
-    return gr.Audio(pth, label="当前音频")
- 
-
-def get_file_asr_summary_in_db(file: str): # file: full path
+def _get_date_name(file: str): # file: full path
     file_date = str(file).split('/')[-2]
     file_name = str(file).split('/')[-1]
+    return file_date, file_name
+
+
+def _get_audio_output_component(file: str):
+    file_date, file_name = _get_date_name(file)
+    return gr.Audio(file, label=f"{file_date} > {file_name}")
+ 
+
+def get_file_asr_summary_in_db(file: str): 
+    file_date, file_name = _get_date_name(file)
 
     table_name='t_'+file_date
     condition=f'audio_name="{file_name}"'
-    query = f'SELECT asr_result, summary FROM {table_name} WHERE {condition}' # TODO
+    query = f'SELECT asr_result, summary, input_num_summary, output_num_summary, input_number, output_number  FROM {table_name} WHERE {condition}' # TODO
 
     results = _query_db(db_pth=DB_PTH, sql=query)
 
     if results:
         res = results[0]
-        assert isinstance(res, tuple) and len(res)==2
-        return res[0], res[1]
+        assert isinstance(res, tuple) and len(res)==6
+        return  res[0], res[1], res[2], res[3], res[4], res[5]
     else:
         raise gr.Error(f"数据库中查询不到该文件：{file_name}！ ")
 
@@ -134,7 +165,7 @@ def _query_db(db_pth=DB_PTH, sql=""):
     return results
 
 
-def filter_files_in_db(in_date, in_num, in_text):
+def _filter_files_in_db(in_date, in_num, in_text):
     date = in_date
     in_date = str(in_date).replace('-', '')
     global CUR_DATE_PTH
@@ -190,10 +221,8 @@ def filter_files_in_db(in_date, in_num, in_text):
             root_dir=TMP_PTH,
             # ignore_glob=".**",
             # height=1000,
-            label="筛选后文件",
+            label=f"日期：{date}",
             interactive=True
-            
-            # elem_id='fe_123',
         )
         # gr.update(elem_id='fe_filter')
 
@@ -202,9 +231,8 @@ def filter_files_in_db(in_date, in_num, in_text):
         return file_explorer_filtered
         # return f"{in_date}, {in_num}, {in_text}"
     else:
-        raise gr.Error(f"查询无该日期：{date}！ 请确保文件夹名称的格式如：20240102！")
+        raise gr.Error(f"查询无该日期：{date}！ 请检查是否有名称为“{in_date}”的文件夹！")
         return "test"
-
 
 
 
@@ -217,7 +245,6 @@ with demo:
         """
     )
 
-
     with gr.Tab("📁️浏览文件"):
 
         gr.Markdown(
@@ -229,83 +256,81 @@ with demo:
 
         with gr.Row():
             with gr.Column():
-                fe_all = gr.FileExplorer(
-                    glob="*", 
-                    file_count="single",
-                    # value=["20240408/hkhdka.txt"],
-                    root_dir=AUDIO_PTH,
-                    # ignore_glob=".**",
-                    label="所有文件",
-                )
-                btn_fe_all = gr.Button("确认")
-            
-
-            with gr.Column():
                 in_cal = Calendar(
                     type="string", 
                     label="选择日期", 
                     # info="Click the calendar icon to bring up the calendar."
                 )
-                # btn_cal = gr.Button("确认")
 
                 in_num = gr.Number(label="输入号码进行匹配：", value="")
-                # btn_num = gr.Button("确认")
+                in_text = gr.Textbox(label="输入对话内容关键字进行搜索：", info="", max_lines=100, interactive=True)
+                with gr.Row():
+                    btn_filter_cancel = gr.Button("清除", interactive=IS_FILTERED)
+                    btn_filter = gr.Button("筛选", variant='primary')
+            
+                # with gr.Column():
+                fe_all = gr.FileExplorer(
+                    glob="*.*", 
+                    file_count="single",
+                    root_dir=AUDIO_PTH,
+                    # ignore_glob=".*",
+                    label="所有文件",
+                )
+                with gr.Row():
+                    btn_all_file = gr.Button("📂 所有文件")
+                    btn_fe_show = gr.Button("🔍 查看")
+            
 
-                in_text = gr.Textbox(label="输入关键字进行搜索：", info="", max_lines=100, interactive=True)
-                btn_filter = gr.Button("筛选")
-
-                # text_test = gr.Textbox(label="", info="", max_lines=100, interactive=True)
-
-
-                with gr.Column():
-                    fe_filtered = gr.FileExplorer(
-                        # glob="*", 
-                        file_count="single",
-                        # value=["20240408/hkhdka.txt"],
-                        root_dir=TMP_PTH,
-                        # ignore_glob=".**",
-                        label="筛选后文件",
-                        # elem_id='fe_filter'
-                    )
-                    btn_fe_filtered = gr.Button("确认")
+                    # with gr.Column():
+                    #     fe_filtered = gr.FileExplorer(
+                    #         # glob="*", 
+                    #         file_count="single",
+                    #         # value=["20240408/hkhdka.txt"],
+                    #         root_dir=TMP_PTH,
+                    #         # ignore_glob=".**",
+                    #         label="筛选后文件",
+                    #         # elem_id='fe_filter'
+                    #     )
+                    #     btn_fe_filtered = gr.Button("确认")
 
 
             
-            # with gr.Column():
             # with gr.Row():
-            text_conv = gr.Textbox(label="对话", info="", max_lines=100, interactive=True)
             with gr.Column():
-                text_summary = gr.Textbox(label="总结", info="", max_lines=100, interactive=True)
                 selected_audio = gr.Audio(value=None, label="当前音频（未选择）")
+                text_conv = gr.Textbox(label="对话", info="", max_lines=100, interactive=True)
+            with gr.Column():
+                text_summary = gr.Textbox(label="当前对话摘要：", info="", max_lines=100, interactive=True)
+                in_summary = gr.Textbox(label="呼入号码今日总结：", info="", max_lines=100, interactive=True)
+                out_summary = gr.Textbox(label="呼出号码今日总结：", info="", max_lines=100, interactive=True)
 
-
-
-
-        btn_fe_all.click(
-            btn_fe_all_listner,
-            inputs=fe_all,
-            outputs=[selected_audio, text_conv, text_summary],
-        )
 
         def tmp_update_fe():
             return gr.FileExplorer(root_dir=AUDIO_PTH)
 
-        btn_filter.click(tmp_update_fe, outputs=fe_filtered).then(
-            fn=filter_files_in_db,
+        btn_filter.click(tmp_update_fe, outputs=fe_all).then(
+            fn=btn_filter_listener,
             inputs=[in_cal, in_num, in_text],
-            outputs=[fe_filtered],
+            outputs=[fe_all, btn_filter_cancel],
         )
 
-        btn_fe_filtered.click(
-            btn_fe_filtered_listener,
-            inputs=fe_filtered,
-            outputs=[selected_audio, text_conv, text_summary],
+        btn_all_file.click(tmp_update_fe, outputs=fe_all).then(
+            btn_all_file_listener,
+            outputs=[fe_all]
+        )
+
+        btn_filter_cancel.click(tmp_update_fe, outputs=fe_all).then(
+            btn_filter_cancel_listener,
+            outputs=[fe_all, in_cal, in_num, in_text, btn_filter_cancel]
         )
 
 
+        btn_fe_show.click(
+            btn_fe_show_listner,
+            inputs=fe_all,
+            outputs=[selected_audio, text_conv, text_summary, in_summary, out_summary],
+        )
 
-        # btn_filter.click(fn=lambda value='./tmp/': gr.update(root_dir=value), inputs=[in_text], outputs=file_filtered)
-  #    gr.Button("确认")
 
 
     with gr.Tab("🎙️生成摘要"):
@@ -364,26 +389,6 @@ with demo:
 
 
 
-
-    # with gr.Tab("📁上传文件"):
-    #     gr.Markdown(
-    #         """
-    #         ## 使用方法
-    #         1. 先点击上传按钮上传音频文件
-    #         2. 然后等待系统处理
-    #         """
-    #     )
-    #     gr.Audio(sources='upload', label='点击上传', )
-    #     gr.Button("确认")
-
-
-
-
-
-
-
-
 if __name__ == "__main__":
     demo.queue().launch()
     # demo.launch()
-
