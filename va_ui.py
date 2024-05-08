@@ -347,15 +347,63 @@ def _filter_meeting_files_in_db(date: int, keyword: str) -> gr.Blocks:
     )
 
 
-demo = gr.Blocks()
-with demo:
 
-    gr.Markdown(
-        """
-        # 🎤📜 对话文本摘要系统
-        """
-    )
+def tab_summary():
+    with gr.Tab("🔴生成"):
+        gr.Markdown(
+            """
+            ## 使用方法
+            1. 选择任一方式输入：(1)录音 (2)上传音频 (3)上传视频
+            2. 然后点击相应识别按钮
+            3. 等待系统识别出文本
+            4. 点击“提取摘要”按钮
+            """
+        )
 
+
+        with gr.Row():
+            with gr.Column():
+                # gr.Markdown("## 录音：")
+                input_mf = gr.Microphone(label='点击录音', type="filepath", show_download_button=True)
+                btn_mp = gr.Button("识别录音")
+
+                input_audio = gr.Audio(sources='upload', type="filepath", label='点击上传', )
+                btn_audio = gr.Button("识别音频")
+
+                input_video = gr.Video(sources='upload', label='点击上传')
+                btn_video = gr.Button("识别视频")
+
+            with gr.Column():
+                # gr.Markdown("## 文本：")
+                out_asr = gr.Textbox(label="文本", info="识别完成后可手动修改，并再次提取摘要", max_lines=100, interactive=True)
+                btn_asr = gr.Button("提取摘要", visible=True)
+
+            with gr.Column():
+                # gr.Markdown("## 摘要：")
+                out_abs = gr.Textbox(label="摘要", info="", max_lines=100, interactive=True)
+                # btn_abs = gr.Button("保存数据库")
+
+
+        btn_mp.click(
+            fn=transcribe,
+            inputs=input_mf,
+            outputs=[out_asr, out_abs],
+        )
+
+        btn_audio.click(
+            fn=transcribe,
+            inputs=input_audio,
+            outputs=[out_asr, out_abs],
+        )
+
+        btn_video.click(
+            fn=process_video,
+            inputs=input_video,
+            outputs=[out_asr, out_abs],
+        )
+
+
+def tab_meeting():
     with gr.Tab("🎥会议"):
 
         gr.Markdown(
@@ -436,7 +484,7 @@ with demo:
             outputs=[selected_video, video_info, meeting_asr, meeting_summary],
         )
 
-
+def tab_audio():
     with gr.Tab("🎙️音频"):
 
         gr.Markdown(
@@ -530,62 +578,18 @@ with demo:
 
 
 
+demo = gr.Blocks()
+with demo:
 
-    with gr.Tab("🔴生成摘要"):
-        gr.Markdown(
-            """
-            ## 使用方法
-            1. 选择任意方式输入：
-                - 录音
-                - 上传音频
-                - 上传视频
-            2. 然后点击相应识别按钮
-            3. 等待系统识别出文本
-            4. 点击“提取摘要”按钮
-            """
-        )
+    gr.Markdown(
+        """
+        # 🎤📜 对话文本摘要系统 V1.0
+        """
+    )
 
-
-        with gr.Row():
-            with gr.Column():
-                # gr.Markdown("## 录音：")
-                input_mf = gr.Microphone(label='点击录音', type="filepath", show_download_button=True)
-                btn_mp = gr.Button("识别录音")
-
-                input_audio = gr.Audio(sources='upload', type="filepath", label='点击上传', )
-                btn_audio = gr.Button("识别音频")
-
-                input_video = gr.Video(sources='upload', label='点击上传')
-                btn_video = gr.Button("识别视频")
-
-            with gr.Column():
-                # gr.Markdown("## 文本：")
-                out_asr = gr.Textbox(label="文本", info="识别完成后可手动修改，并再次提取摘要", max_lines=100, interactive=True)
-                btn_asr = gr.Button("提取摘要", visible=True)
-
-            with gr.Column():
-                # gr.Markdown("## 摘要：")
-                out_abs = gr.Textbox(label="摘要", info="", max_lines=100, interactive=True)
-                # btn_abs = gr.Button("保存数据库")
-
-
-        btn_mp.click(
-            fn=transcribe,
-            inputs=input_mf,
-            outputs=[out_asr, out_abs],
-        )
-
-        btn_audio.click(
-            fn=transcribe,
-            inputs=input_audio,
-            outputs=[out_asr, out_abs],
-        )
-
-        btn_video.click(
-            fn=process_video,
-            inputs=input_video,
-            outputs=[out_asr, out_abs],
-        )
+    tab_summary()
+    tab_audio()
+    tab_meeting()
 
 
 
