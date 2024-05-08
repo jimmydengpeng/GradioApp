@@ -361,7 +361,9 @@ with demo:
         gr.Markdown(
             """
             ## 使用方法
-            1.
+            1. 选择或输入相应筛选条件
+            2. 点击“筛选”按钮对所有文件进行筛选
+            3. 点击“查看”按钮查看详情
             """
         )
         with gr.Row():
@@ -440,7 +442,9 @@ with demo:
         gr.Markdown(
             """
             ## 使用方法
-            1.
+            1. 选择或输入相应筛选条件
+            2. 点击“筛选”按钮对所有文件进行筛选
+            3. 点击“查看”按钮查看详情
             """
         )
 
@@ -531,8 +535,13 @@ with demo:
         gr.Markdown(
             """
             ## 使用方法
-            1. 先点击录音
-            2. 然后等待系统处理
+            1. 选择任意方式输入：
+                - 录音
+                - 上传音频
+                - 上传视频
+            2. 然后点击相应识别按钮
+            3. 等待系统识别出文本
+            4. 点击“提取摘要”按钮
             """
         )
 
@@ -546,7 +555,7 @@ with demo:
                 input_audio = gr.Audio(sources='upload', type="filepath", label='点击上传', )
                 btn_audio = gr.Button("识别音频")
 
-                input_video = gr.Video(sources='upload')
+                input_video = gr.Video(sources='upload', label='点击上传')
                 btn_video = gr.Button("识别视频")
 
             with gr.Column():
@@ -556,8 +565,8 @@ with demo:
 
             with gr.Column():
                 # gr.Markdown("## 摘要：")
-                out_abs = gr.Textbox(label="摘要", info="提取完成后可手动修改摘要再保存", max_lines=100, interactive=True)
-                btn_abs = gr.Button("保存数据库")
+                out_abs = gr.Textbox(label="摘要", info="", max_lines=100, interactive=True)
+                # btn_abs = gr.Button("保存数据库")
 
 
         btn_mp.click(
