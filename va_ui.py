@@ -1,12 +1,14 @@
 import os, shutil
 import os.path as osp
-import numpy as np
+
 import gradio as gr
 from gradio_calendar import Calendar
 import sqlite3
 import torch
 from transformers import pipeline
 from langchain_community.llms import Ollama
+
+from date_utils import *
 
 
 MODEL_NAME = "openai/whisper-large-v3"
@@ -17,21 +19,30 @@ VIDEO_LENGTH_LIMIT_S = 3600  # TODO(jimmy) limit to 1 hour video files
 device = 0 if torch.cuda.is_available() else "cpu"
 
 
-# --- 设置全局路径 --- 
+# --- 设置全局路径 --- #
 # 音频文件所在路径
 AUDIO_PTH = './audio'
-AUDIO_FILE_LIST = os.listdir(AUDIO_PTH)
+AUDIO_DATE_LIST = os.listdir(AUDIO_PTH)
+
+# 视频文件所在路径
+ROOT_MEETING = './meeting'
+MEETING_DATE_LIST = os.listdir(ROOT_MEETING)
 
 # 数据库文件路径
-DB_PTH = 'audio.db'
+DB_PTH_A = 'audio.db'
+DB_PTH_M = 'meeting.db'
 
 # 临时文件目录
 TMP_PTH = './tmp/'
-if not osp.exists(TMP_PTH):
-    os.mkdir(TMP_PTH)
+TMP_PTH_A = './tmp/audio'
+TMP_PTH_M = './tmp/meeting'
+for p in [TMP_PTH, TMP_PTH_A, TMP_PTH_M]:
+    if not osp.exists(p): os.mkdir(p)
 
-CUR_DATE_PTH = AUDIO_FILE_LIST[0] # e.g. 2024XXXX
-IS_FILTERED = False
+CUR_DATE_PTH_A = AUDIO_DATE_LIST[0] # e.g. 2024XXXX
+CUR_DATE_FILTERED_M = MEETING_DATE_LIST[0] # e.g. 2024XX
+IS_FILTERED_A = False
+IS_FILTERED_M = False
 
 
 TEST_LOAD_MODEL = False
@@ -44,18 +55,24 @@ if TEST_LOAD_MODEL:
     llm = Ollama(model="qwen:7b")
 
 
-# --- Button Click Listeners ---
+# --- Button Click Listeners --- #
 
-def btn_filter_listener(in_date, in_num, in_text):
-    global IS_FILTERED
-    IS_FILTERED = True
-    return _filter_files_in_db(in_date, in_num, in_text), _get_cancel_btn(IS_FILTERED)
+def btn_filter_a_listener(in_date, in_num, in_text):
+    global IS_FILTERED_A
+    IS_FILTERED_A = True
+    return _filter_audio_files_in_db(in_date, in_num, in_text), _get_cancel_btn(IS_FILTERED_A)
 
-def _get_fe_all():
+def btn_filter_m_listener(in_year: int, in_month: str, in_keyword_m):
+    date = get_date_str(in_year, in_month)
+    # _filter_meeting_files_in_db(date, in_keyword_m)
+    return _filter_meeting_files_in_db(date, in_keyword_m), _get_cancel_btn(IS_FILTERED_M)
+
+
+def _get_fe_all(root: str):
     return gr.FileExplorer(
         glob="*.*", 
         file_count="single",
-        root_dir=AUDIO_PTH,
+        root_dir=root,
         # ignore_glob=".*",
         label="所有文件")
 
@@ -63,27 +80,34 @@ def _get_cancel_btn(interactive):
     return gr.Button("清除", interactive=interactive)
 
 def btn_all_file_listener():
-    global IS_FILTERED
-    IS_FILTERED = False
-    return _get_fe_all()
+    global IS_FILTERED_A
+    IS_FILTERED_A = False
+    return _get_fe_all(AUDIO_PTH)
+
+
+def btn_all_file_m_listener():
+    global IS_FILTERED_M
+    IS_FILTERED_M = False
+    return _get_fe_all(ROOT_MEETING)
+
 
 def btn_filter_cancel_listener():
-    global IS_FILTERED
-    IS_FILTERED = False
+    global IS_FILTERED_A
+    IS_FILTERED_A = False
     fe_all = _get_fe_all()
     in_cal = Calendar(value=None, type="string", label="选择日期")
     in_num = gr.Number(label="输入号码进行匹配：", value="")
     in_text = gr.Textbox(label="输入对话内容关键字进行搜索：", value="", info="", max_lines=100, interactive=True)
-    return fe_all, in_cal, in_num, in_text, _get_cancel_btn(IS_FILTERED)
+    return fe_all, in_cal, in_num, in_text, _get_cancel_btn(IS_FILTERED_A)
 
 def btn_fe_show_listner(file: str):
-    if IS_FILTERED:
+    if IS_FILTERED_A:
         # 预处理文件路径
         file_name = str(file).split('/')[-1]
-        file = _get_file_pth(file_name, CUR_DATE_PTH, AUDIO_PTH)
+        file = _get_file_pth(file_name, CUR_DATE_PTH_A, AUDIO_PTH)
         if not osp.exists(file):
             raise gr.Error(f"No such file path for {file}!")
-    res = get_file_asr_summary_in_db(file)
+    res = select_audio_from_db(file)
 
     in_num = res[4]
     out_num = res[5]
@@ -93,6 +117,31 @@ def btn_fe_show_listner(file: str):
 
     return _get_audio_output_component(file), res[0], res[1], in_summary, out_summary
 
+
+
+
+# --- 2. 会议 --- #
+
+def btn_fe_show_m_listner(file: str):
+    if IS_FILTERED_M:
+        # 预处理文件路径
+        file_name = str(file).split('/')[-1]
+        file = _get_file_pth(file_name, CUR_DATE_FILTERED_M, ROOT_MEETING)
+        if not osp.exists(file):
+            raise gr.Error(f"No such file path for {file}!")
+    res = select_video_from_db(file)
+
+    file_date, file_name = _get_date_name(file)
+    file_name = "".join(file_name.split('-')[1:])
+    if '.' in file_name:
+        file_name = "".join(file_name.split('.')[:-1])
+    video_info = gr.Markdown(f"* **会议日期：** {file_date}\n* **会议名称：** {file_name}")
+
+    return _get_video_output_component(file), video_info, res[0], res[1],
+
+
+
+# --- 3. 生成摘要 --- #
 
 def process_video(pth: str):
     new_pth = pth.split('.')[0] + '.wav'
@@ -124,16 +173,20 @@ def _get_date_name(file: str): # file: full path
 def _get_audio_output_component(file: str):
     file_date, file_name = _get_date_name(file)
     return gr.Audio(file, label=f"{file_date} > {file_name}")
- 
 
-def get_file_asr_summary_in_db(file: str): 
+def _get_video_output_component(file: str):
+    # file_date, file_name = _get_date_name(file)
+    return gr.Video(file, label=None, show_label=False)
+
+
+def select_audio_from_db(file: str): 
     file_date, file_name = _get_date_name(file)
 
     table_name='t_'+file_date
     condition=f'audio_name="{file_name}"'
     query = f'SELECT asr_result, summary, input_num_summary, output_num_summary, input_number, output_number  FROM {table_name} WHERE {condition}' # TODO
 
-    results = _query_db(db_pth=DB_PTH, sql=query)
+    results = _query_db(db_pth=DB_PTH_A, sql=query)
 
     if results:
         res = results[0]
@@ -143,7 +196,27 @@ def get_file_asr_summary_in_db(file: str):
         raise gr.Error(f"数据库中查询不到该文件：{file_name}！ ")
 
 
-def _query_db(db_pth=DB_PTH, sql=""):
+def select_video_from_db(file: str): 
+    file_date, file_name = _get_date_name(file)
+
+    table_name='t_'+file_date
+    condition=f'meeting_name="{file_name}"'
+    query = f'SELECT asr_result, summary FROM {table_name} WHERE {condition}' # TODO
+    print(query)
+
+    results = _query_db(db_pth=DB_PTH_M, sql=query)
+
+    if results:
+        res = results[0]
+        assert isinstance(res, tuple) and len(res)==2
+        return  res[0], res[1]
+    else:
+        print(table_name)
+        print(condition)
+        raise gr.Error(f"数据库中查询不到该文件：{file_name}！ ")
+
+
+def _query_db(db_pth=DB_PTH_A, sql=""):
     # 连接到SQLite数据库
     conn = sqlite3.connect(db_pth)
     cursor = conn.cursor()
@@ -165,12 +238,12 @@ def _query_db(db_pth=DB_PTH, sql=""):
     return results
 
 
-def _filter_files_in_db(in_date, in_num, in_text):
+def _filter_audio_files_in_db(in_date, in_num, in_text):
     date = in_date
     in_date = str(in_date).replace('-', '')
-    global CUR_DATE_PTH
+    global CUR_DATE_PTH_A
 
-    if in_date in AUDIO_FILE_LIST:
+    if in_date in AUDIO_DATE_LIST:
         table_name = 't_'+in_date
         if in_num and in_text:
             print('1 ======')
@@ -204,13 +277,13 @@ def _filter_files_in_db(in_date, in_num, in_text):
         file_list = [osp.join(osp.join(AUDIO_PTH, in_date), res[0]) for res in results]
 
 
-        for _file in os.listdir(TMP_PTH):
-            os.remove(osp.join(TMP_PTH, _file))
+        for _file in os.listdir(TMP_PTH_A):
+            os.remove(osp.join(TMP_PTH_A, _file))
 
 
         for file in file_list:
             print(file)
-            shutil.copy(file, TMP_PTH)
+            shutil.copy(file, TMP_PTH_A)
 
         
 
@@ -218,7 +291,7 @@ def _filter_files_in_db(in_date, in_num, in_text):
             # glob="*", 
             file_count="single",
             # value=["20240408/hkhdka.txt"],
-            root_dir=TMP_PTH,
+            root_dir=TMP_PTH_A,
             # ignore_glob=".**",
             # height=1000,
             label=f"日期：{date}",
@@ -226,7 +299,7 @@ def _filter_files_in_db(in_date, in_num, in_text):
         )
         # gr.update(elem_id='fe_filter')
 
-        CUR_DATE_PTH = in_date
+        CUR_DATE_PTH_A = in_date
         
         return file_explorer_filtered
         # return f"{in_date}, {in_num}, {in_text}"
@@ -234,6 +307,44 @@ def _filter_files_in_db(in_date, in_num, in_text):
         raise gr.Error(f"查询无该日期：{date}！ 请检查是否有名称为“{in_date}”的文件夹！")
         return "test"
 
+
+def _filter_meeting_files_in_db(date: int, keyword: str) -> gr.Blocks:
+    # 根据筛选条件筛选出符合的文件，输出一个gr.file_explorer组件
+    # 1. 只在date所示月份下筛选
+    # 2. 如不提供keyword则返回该月所有文件
+    # date: 月份 (202404)
+    # keyword: 摘要或者对话中的关键字
+
+    global IS_FILTERED_M
+    IS_FILTERED_M = True
+
+    global CUR_DATE_FILTERED_M
+    CUR_DATE_FILTERED_M = date
+
+    table_name = 't_'+ date
+    if keyword:
+        query = f"SELECT meeting_name FROM {table_name} WHERE asr_result LIKE '%{keyword}%' "
+    else:
+        query = f"SELECT meeting_name FROM {table_name}"
+
+    results = _query_db(db_pth=DB_PTH_M, sql=query) # -> [(file_name, ), ...]
+
+    file_list = [osp.join(osp.join(ROOT_MEETING, date), res[0]) for res in results]
+
+    for _file in os.listdir(TMP_PTH_M):
+        os.remove(osp.join(TMP_PTH_M, _file))
+
+    for file in file_list:
+        print(file)
+        shutil.copy(file, TMP_PTH_M)
+
+
+    return gr.FileExplorer(
+        file_count="single",
+        root_dir=TMP_PTH_M,
+        label=f"日期：{date}",
+        interactive=True
+    )
 
 
 demo = gr.Blocks()
@@ -245,7 +356,86 @@ with demo:
         """
     )
 
-    with gr.Tab("📁️浏览文件"):
+    with gr.Tab("🎥会议"):
+
+        gr.Markdown(
+            """
+            ## 使用方法
+            1.
+            """
+        )
+        with gr.Row():
+            with gr.Column():
+                # gr.Markdown("**筛选**：")
+                with gr.Row():
+                    in_year = gr.Number(
+                        label="输入年份：", 
+                        value=datetime.datetime.now().year, 
+                        interactive=True, 
+                        precision=0)
+
+                    in_month = gr.Dropdown(
+                        label="选择月份：", 
+                        choices=all_months_zh,
+                        value=get_cur_month_zh(),
+                        allow_custom_value=False,
+                        interactive=True)
+
+                in_keyword_m = gr.Textbox(label="输入对话内容关键字进行搜索：", info="", interactive=True)
+                with gr.Row():
+                    btn_filter_cancel_m = gr.Button("清除", interactive=IS_FILTERED_A)
+                    btn_filter_m = gr.Button("筛选", variant='primary')
+
+                fe_all_m = gr.FileExplorer(
+                    glob="*.*", 
+                    file_count="single",
+                    root_dir=ROOT_MEETING,
+                    label="所有文件",
+                )
+                with gr.Row():
+                    btn_all_file_m = gr.Button("📂 所有文件")
+                    btn_fe_show_m = gr.Button("🔍 查看")
+
+            
+            # with gr.Row():
+            with gr.Column():
+                selected_video = gr.Video(value=None, label="当前会议（未选择）")
+                video_info = gr.Markdown("""
+                            * **会议日期：**
+                            * **文件名称：**
+                            """)
+                meeting_summary = gr.Textbox(label="会议摘要：", info="", max_lines=35, interactive=True)
+            with gr.Column():
+                meeting_asr = gr.Textbox(label="会议内容", info="", max_lines=35, interactive=True)
+
+
+        def tmp_update_fe_m():
+            return gr.FileExplorer(root_dir=ROOT_MEETING)
+
+        btn_filter_m.click(tmp_update_fe_m, outputs=fe_all_m).then(
+            fn=btn_filter_m_listener,
+            inputs=[in_year, in_month, in_keyword_m],
+            outputs=[fe_all_m, btn_filter_cancel_m],
+        )
+
+        btn_filter_cancel_m.click(
+            lambda _: gr.Textbox(""),
+            outputs=[in_keyword_m],
+        )
+
+        btn_all_file_m.click(tmp_update_fe_m, outputs=fe_all_m).then(
+            btn_all_file_m_listener,
+            outputs=[fe_all_m],
+        )
+
+        btn_fe_show_m.click(
+            btn_fe_show_m_listner,
+            inputs=fe_all_m,
+            outputs=[selected_video, video_info, meeting_asr, meeting_summary],
+        )
+
+
+    with gr.Tab("🎙️音频"):
 
         gr.Markdown(
             """
@@ -258,15 +448,15 @@ with demo:
             with gr.Column():
                 in_cal = Calendar(
                     type="string", 
-                    label="选择日期", 
+                    label="📆 选择日期", 
                     # info="Click the calendar icon to bring up the calendar."
                 )
 
                 in_num = gr.Number(label="输入号码进行匹配：", value="")
                 in_text = gr.Textbox(label="输入对话内容关键字进行搜索：", info="", max_lines=100, interactive=True)
                 with gr.Row():
-                    btn_filter_cancel = gr.Button("清除", interactive=IS_FILTERED)
-                    btn_filter = gr.Button("筛选", variant='primary')
+                    btn_filter_cancel = gr.Button("清除", interactive=IS_FILTERED_A)
+                    btn_filter_a = gr.Button("筛选", variant='primary')
             
                 # with gr.Column():
                 fe_all = gr.FileExplorer(
@@ -308,8 +498,8 @@ with demo:
         def tmp_update_fe():
             return gr.FileExplorer(root_dir=AUDIO_PTH)
 
-        btn_filter.click(tmp_update_fe, outputs=fe_all).then(
-            fn=btn_filter_listener,
+        btn_filter_a.click(tmp_update_fe, outputs=fe_all).then(
+            fn=btn_filter_a_listener,
             inputs=[in_cal, in_num, in_text],
             outputs=[fe_all, btn_filter_cancel],
         )
@@ -333,7 +523,11 @@ with demo:
 
 
 
-    with gr.Tab("🎙️生成摘要"):
+
+
+
+
+    with gr.Tab("🔴生成摘要"):
         gr.Markdown(
             """
             ## 使用方法
